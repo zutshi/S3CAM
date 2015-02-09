@@ -1,13 +1,9 @@
-###### ##############################
-# S3CAM                             #
-# Falsification Tool                #
-#                                   #
-# Aditya Zutshi                     #
-# aditya.zutshi@colorado.edu        #
-###### ##############################
+###### ###############################################################
+# S3CAM: A Falsification Tool for Safety Properties of Hybrid Systems
+###### ###############################################################
 
 ###################
-  ### CONTENTS ###
+# CONTENTS ###
 ###################
 
 The archive containes
@@ -15,7 +11,7 @@ The archive containes
 - graph search C code: ./src/graphNpaths
 
 ###################
-  ### SETUP ###
+# SETUP ###
 ###################
 - Type 'make' to compile C files in the ./src/graphNpaths directory
 - Type 'make' to compile C files in the ./src/graphNpaths/k_paths directory
@@ -24,7 +20,7 @@ The archive containes
         Enable Parallelization: Type 'matlabpool' in matlab to start worker threads
 
 ###################
-  ### RUN ###
+# RUN ###
 ###################
 
 - run_s3cam.m demos how to run S3CAM
@@ -32,7 +28,7 @@ The archive containes
 Note: The path of the benchmark files need to be added into Matlab before they can be run. (Open and run the file in Matlab or use 'addpath()' )
 
 ###################
-  ### Logs ###
+# Logs ###
 ###################
 
 Each benchmark folder contains logs for all properties presented in the paper for both S-Taliro and Scatter-And-Simulate under respective folders.
