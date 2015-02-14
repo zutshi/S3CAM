@@ -41,12 +41,14 @@ function [ret_t,ret_X,currMode] = SIM(Tspan,XX,~,currMode)
 
 T = Tspan(1,2);
 
-model_name = 'vanderpol_simulink';
-% model_name  = '/home/zutshi/work/RA/cpsVerification/HyCU/releases/S3CAM/benchmarks/vanderpol/vanderpol_simulink.slx';
+%% enable load_system() to run in parallel
+% load_system(model_name);
 
+%% set initial conditions
 set_param([model_name '/int1'],'InitialCondition',num2str(XX(1)))
 set_param([model_name '/subsys/int2'],'InitialCondition',num2str(XX(2)))
 
+%% simulate
 [ret_t, ret_X, YT] = sim(model_name,[0 T]);
 end
 
@@ -121,4 +123,8 @@ y = 1;
 end
 function y = X2()
 y = 2;
+end
+
+function y = model_name()
+y = 'vanderpol_simulink';
 end
