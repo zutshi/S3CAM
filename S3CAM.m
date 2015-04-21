@@ -47,7 +47,6 @@ if strcmp(runType, 'simulate')%phase == 11
     sys_opt.samplingType = 'UniformRand';
     [initCellMat,~] = generateSamples(sys_def,sys_prop,sys_abs,sys_opt);
     time_dod = tic;
-    numViolations = 0;
     disp('simulating...');
     
     
@@ -111,16 +110,16 @@ elseif strcmp(runType, 'analyzeInit')%phase == 24
     initModeInv = sys_def.modeInvMap(sys_prop.initConstraints.mode);
     initArr = [];
     fprintf('generating init samples...');
-    parfor i = 1:size(initCells,1)
+    parfor i = 1:rows(initCells)
         cellToSample = initCells(i,:);
         % the scattered points are checked against the mode invariant
         cellSamples = scatterX(cellToSample,sys_def,numSamplesPerCell,sampling_grid_eps, initModeInv);
         initArr = [initArr;cellSamples];
     end
-    fprintf('%d generated\n',size(initArr,1));
+    fprintf('%d generated\n',rows(initArr));
     sys_def.initSet{cons_i.mode} = initArr;
     
-    fprintf('cells to simulate %d\n',size(initCells,1));
+    fprintf('cells to simulate %d\n',rows(initCells));
     
     
     if NUM_CINPUT_VARS == 0
@@ -200,7 +199,7 @@ elseif strcmp(runType, 'analyzeInit')%phase == 24
             end
             
         end
-        fprintf('num. cells extracted from paths: %d\n',size(exploredCells,1));
+        fprintf('num. cells extracted from paths: %d\n',rows(exploredCells));
         
         %% subdivide successfull initial cells
         initCellsToSimulate = [];
@@ -208,10 +207,10 @@ elseif strcmp(runType, 'analyzeInit')%phase == 24
         %% get 0 measure initial conditions
         fprintf('generating init samples...');
         initArr = [];
-        for j = 1:size(exploredCells,1)
+        for j = 1:rows(exploredCells)
             oldGridCell = exploredCells(j,:);
             newGridCells = subDivideCells(oldGridCell,sampling_prev_grid_eps,sampling_curr_grid_eps);
-            for i = 1:size(newGridCells,1)
+            for i = 1:rows(newGridCells)
                 newGridCell = newGridCells(i,:);
                 if checkIntersection(getCellRange(newGridCell,sampling_curr_grid_eps),cons_i.cube) == 1
                     initCellsToSimulate = [initCellsToSimulate;newGridCell];
@@ -226,10 +225,10 @@ elseif strcmp(runType, 'analyzeInit')%phase == 24
         drawCells(initCellsToSimulate,sampling_curr_grid_eps);
         drawPropBox(sys_opt);
         
-        fprintf('cells to simulate %d\n',size(initCellsToSimulate,1));
+        fprintf('cells to simulate %d\n',rows(initCellsToSimulate));
         
         
-        fprintf('%d generated\n',size(initArr,1));
+        fprintf('%d generated\n',rows(initArr));
         sys_def.initSet{cons_i.mode} = initArr;
         if isempty(initArr)
             error('empty init set')
@@ -250,7 +249,7 @@ elseif strcmp(runType, 'analyzeInit')%phase == 24
         % initArr = [0.39887 -0.39216];
         %        0.3999     -0.39606
         
-        fprintf('checking for errors trajs: %d\n',size(initArr,1));
+        fprintf('checking for errors trajs: %d\n',rows(initArr));
         %% simulate only cells
         
         tmpInitSet = cell(1,sys_def.NUM_MODES);
@@ -360,7 +359,7 @@ end
 %% snaps any state to the center of the appropriate cell in the current grid
 function X_snapped = snapToGrid(X,grid_eps)
 % X_snapped = truncate(X./grid_eps).*grid_eps + grid_eps/2;
-grid_eps_mat = repmat(grid_eps,size(X,1),1);
+grid_eps_mat = repmat(grid_eps,rows(X),1);
 % why use truncate when fix is there?
 
 % doesn't handle sign(0) properly! returns 0!!
@@ -399,7 +398,7 @@ if range(zeroGridEpsIdx,1) ~= range(zeroGridEpsIdx,2)
     error('unhandled condition, grid_eps is 0 but range is non-zero measure')
 end
 
-numDim = size(range,1);
+numDim = rows(range);
 H = cell(1,numDim);
 rangeMat = cell(1,numDim);
 for i = 1:numDim
@@ -438,7 +437,7 @@ if range(zeroGridEpsIdx,1) ~= range(zeroGridEpsIdx,2)
     error('unhandled condition, grid_eps is 0 but range is non-zero measure')
 end
 %%
-numDim = size(cellRange,1);
+numDim = rows(cellRange);
 H = cell(1,numDim);
 rangeMat = cell(1,numDim);
 for i = 1:numDim
@@ -473,7 +472,8 @@ graphFileName = [fileName '.graph'];
 
 numPaths = 10000;
 
-KTEST = './graphNpaths/grahel/ktest';
+% KTEST = './graphNpaths/grahel/ktest';
+KTEST = './graphNpaths/k_paths/ktest'
 CREATE_GRAPH = './graphNpaths/createGraph';
 
 cgcmd = [CREATE_GRAPH ' ' fileName ' ' num2str(NNthresh)];
@@ -598,463 +598,6 @@ end
 
 
 %fprintf('scattered %d points within a Linf of %f\n',size(P,1),maxJmp);
-end
-
-function [finalArr,trajsCellMatXi,trajsCellMatXf,timeCellMat,trajMat,simTime] = simulateSystemCellBasedMERGEDBUGGYFLATIP(sys_def,sys_prop,sys_abs,sys_opt,eventToTransitionInvMap,eventSet,terminalSet,eventInfo)
-
-time_sim = tic;
-numViolations = 0;
-plotTrajs = 0;
-
-if sys_def.NUM_PARAMS ~= 0
-    error('parameter handlind disabled: code them in as regular state variables')
-end
-
-MAX_SWITCHINGS = sys_opt.ScatterSim.MAX_SWITCHINGS;
-MAX_SAMPLE_AGE = sys_prop.TH;
-
-
-grid_eps = sys_abs.grid_eps;
-
-modeDynMap = sys_maps.modeDynMap;
-transitionMap = sys_maps.transitionMap;
-MODE_LIST = sys_def.MODE_LIST;
-NUM_STATE_VARS = sys_def.NUM_STATE_VARS;
-
-
-exploredCells = sys_def.initCells;
-
-cons_i = sys_prop.initConstraints;
-cons_f = sys_prop.finalConstraints;
-finalArr = [];
-
-numSamplesPerCell = sys_abs.numSamples;
-
-% hack to fix mode issue!
-initSet = cell(1,sys_def.NUM_MODES);
-initSet{cons_i.mode} = sys_def.initSet{cons_i.mode};
-
-options = odeset('Events',@events,'Refine',4,'RelTol',1e-6);%,'MaxStep',1e-4);
-
-% This assumes that the max dwell time in a mode is 100s
-% MODE_TIME_HORIZON = sys_opt.MODE_TIME_HORIZON;
-Delta = sys_abs.Delta;
-trajsCellMatXi = cell(1,sys_def.NUM_MODES);
-trajsCellMatXf = cell(1,sys_def.NUM_MODES);
-timeCellMat = cell(1,sys_def.NUM_MODES);
-trajMat = [];
-
-% [eventToTransitionInvMap,eventSet,terminalSet,eventInfo] = prepEventDetection(sys_def,sys_maps);
-
-NUM_CINPUT_VARS = sys_def.NUM_CINPUT_VARS;
-
-XArr = [];
-ageArr = [];
-samples_numSwitches =[];
-currModeArr = [];
-THArr = [];
-for currMode = MODE_LIST
-    if ~isempty(initSet{currMode})
-        numSamples = size(initSet{currMode},1);
-        XArr = [XArr; initSet{currMode}];
-        ageArr = [ageArr; zeros(numSamples,1)];
-        samples_numSwitches =[samples_numSwitches; zeros(numSamples,1)];
-        disp(size(XArr,1))
-        currModeArr = [currModeArr; repmat(currMode,numSamples,1)];
-        THArr = [THArr; Delta*ones(numSamples,1)];
-        if NUM_CINPUT_VARS ~= 0
-            randPoints = rand(numSamples,NUM_CINPUT_VARS);
-            samples_Inp = genRandVectors(randPoints,sys_def.CINPUT_BOUNDS);
-        else
-            samples_Inp = [];
-        end
-    end
-end
-
-
-while ~isempty(XArr)
-    if NUM_CINPUT_VARS ~= 0
-        InpArr = samples_Inp;
-    else
-        InpArr = [];
-    end
-    
-    numInitStates = size(XArr,1);
-    fprintf('simulating %d samples\n',numInitStates);
-    
-    
-    trajsMatXi = zeros(numInitStates,NUM_STATE_VARS);
-    trajsMatXf = zeros(numInitStates,NUM_STATE_VARS);
-    timeMat = zeros(numInitStates,1);
-    newModeArr = [];
-    
-    plotSet = cell(1,numInitStates);
-    
-    switchFlagArr = zeros(numInitStates,1);
-    
-    % parfor here
-    parfor i = 1:numInitStates
-        vio = 0;
-        X0 = XArr(i,1:NUM_STATE_VARS);
-        currMode = currModeArr(i);
-        eventToTransitionInv = eventToTransitionInvMap{currMode};
-        modeDynStruct = modeDynMap(currMode);
-        if NUM_CINPUT_VARS ~= 0
-            if modeDynStruct.isNonLinear == 0
-                modeDyn = @(~,X,~,U,~,~,~) modeDynStruct.A*X + modeDynStruct.b + modeDynStruct.B*U;
-            else
-                modeDyn = @(t,X,~,U,currMode,~,~) modeDynStruct.F(t,X,U,currMode);
-            end
-        else
-            if modeDynStruct.isNonLinear == 0
-                modeDyn = @(~,X,~,~,~,~,~) modeDynStruct.A*X + modeDynStruct.b;
-            else
-                modeDyn = @(t,X,~,~,currMode,~,~) modeDynStruct.F(t,X,[],currMode);
-            end
-        end
-        TH = THArr(i,1);
-        
-        if NUM_CINPUT_VARS == 0
-            [t,X,te,ye,ie] = ode45(modeDyn,[0 TH],X0,options,[],[],currMode,eventSet,terminalSet);
-        else
-            cip = InpArr(i,1);
-            [t,X,te,ye,ie] = ode45(modeDyn,[0 TH],X0,options,[],cip,currMode,eventSet,terminalSet);
-        end
-        [teout, Y, eventFound, event] = checkNreturnEvent(te,ye,ie,eventToTransitionInv,eventInfo,transitionMap,sys_opt);
-        if isempty(te) || ~eventFound
-            newMode = currMode;
-            Xf = X(end,:);
-            tf = t(end);
-            if tf ~= TH
-                error('internal: not possible! floating point errors?')
-            end
-            THArr(i,1) = 0;
-        elseif event.type == TRANSITION
-            %             warning('TRANSITION')
-            newMode = event.transitionID.toMode;
-            transition = getTransition(event.transitionID,transitionMap);
-            if transition.reset.isNonLinear == 1
-                Xf = transition.reset.F(Y')';
-            elseif transition.reset.isNonLinear == 0
-                Xf = (transition.reset.A*Y' + transition.reset.b)';
-            else
-                error('simulate: reset.isNonLinear is neither 0 or 1!')
-            end
-            tf = teout;
-            switchFlagArr(i) = 1;
-            THArr(i,1) = THArr(i,1) - tf;
-        elseif event.type == MODE_INVARIANT
-            newMode = -1;
-            Xf = Y;
-            tf = teout;
-            %             warning('invariant hit!')
-        elseif event.type == PROP_SAT
-            newMode = -1;
-            Xf = Y;
-            tf = teout;
-            numViolations = numViolations+1;
-            %error('prop-sat')
-            finalArr = [finalArr; Xf];
-            vio = 1;
-        else
-            error('simulateSystem: not possible to reach here')
-        end
-        % TODO: make transition objects carry from and to info
-        trajsMatXi(i,:) = X0;
-        trajsMatXf(i,:) = Xf;
-        timeMat(i,:) = tf;
-        
-        %% check if landed on an error cell
-        if vio == 0%
-            X_snapped = snapToGrid(Xf,grid_eps);
-            if checkIntersection(getCellRange(X_snapped,grid_eps),cons_f.cube) == 1
-                finalArr = [finalArr; Xf];
-                newMode = -1;
-            end
-        end
-        
-        %TODO: better detection of a new mode is required for non-deterministic transitions
-        %% debug
-        if plotTrajs == 1
-            idx = (t <= tf);
-            t = [t(idx); tf];
-            X = [X(idx,:); Xf];
-            plotSet{i} = [X t+ageArr(i,1)];
-        end
-        newModeArr(i,1) = newMode;
-        ageArr(i,1) = ageArr(i,1) + tf;
-    end
-    %% debug
-    if plotTrajs == 1
-        for j = 1:length(plotSet)
-            sys_opt.plotFun(plotSet{j}(:,NUM_STATE_VARS+1),plotSet{j}(:,1:NUM_STATE_VARS),currModeArr(j));
-        end
-        drawnow;
-    end
-    
-    for currMode = MODE_LIST
-        idx = currModeArr == currMode;
-        trajsCellMatXi{currMode} = [trajsCellMatXi{currMode}; trajsMatXi(idx,:)];
-        trajsCellMatXf{currMode} = [trajsCellMatXf{currMode}; trajsMatXf(idx,:)];
-        timeCellMat{currMode} = [timeCellMat{currMode}; timeMat(idx)];
-    end
-    
-    numSwitchArr = samples_numSwitches + switchFlagArr;
-    
-    filterIdx = (newModeArr < 0 | ageArr >= MAX_SAMPLE_AGE | numSwitchArr >= MAX_SWITCHINGS);
-    
-    %fprintf('suspending %d\n', length(find(filterIdx)))
-    % invert the indices and assign only the values which are not suspended
-    filtered_newModeArr = newModeArr(~filterIdx);
-    filtered_ageArr = ageArr(~filterIdx);
-    filtered_XArr = trajsMatXf(~filterIdx,:);
-    filtered_swichArr = numSwitchArr(~filterIdx);
-    filtered_THArr = THArr(~filterIdx);
-    if NUM_CINPUT_VARS ~= 0
-        filtered_InpArr = InpArr(~filterIdx);
-    else
-        filtered_InpArr = [];
-    end
-    newX_arr = [];
-    newNewModeArr = [];
-    newAgeArr = [];
-    newNumSwitchesArr = [];
-    newTHArr = [];
-    newInpArr = [];
-    numStates = length(filtered_newModeArr);
-    
-    %% new code for scattering:
-    % - does not scatter at guards
-    % - scatters more uniformly
-    
-    
-    % TBD: parallelize
-    for k = 1:numStates
-        X = filtered_XArr(k,:);
-        newMode = filtered_newModeArr(k);
-        age = filtered_ageArr(k);
-        Sw = filtered_swichArr(k);
-        TH = filtered_THArr(k);
-        if NUM_CINPUT_VARS ~= 0
-            Inp = filtered_InpArr(k);
-        else
-            Inp = [];
-        end
-        
-        if TH ~= 0
-            newX_arr = [newX_arr;X];
-            newNewModeArr = [newNewModeArr;newMode];
-            newAgeArr = [newAgeArr;age];
-            newNumSwitchesArr = [newNumSwitchesArr;Sw];
-            newTHArr = [newTHArr;TH];
-            newInpArr = [newInpArr;Inp];
-        else
-            modeInv = sys_def.modeInvMap(newMode);
-            % snap X to grid
-            X_snapped = snapToGrid(X,grid_eps);
-            
-            if isempty(exploredCells) || ~ismember(X_snapped,exploredCells,'rows')
-                % scatter only inside the cell
-                scatteredX = scatterX(X_snapped,sys_def,numSamplesPerCell,grid_eps, modeInv);
-                n = size(scatteredX,1);
-                
-                newX_arr = [newX_arr; scatteredX];
-                newNewModeArr = [newNewModeArr; repmat(newMode,n,1)];
-                % all the new scattered points inherit the age of their father/mother
-                newAgeArr = [newAgeArr; repmat(age,n,1)];
-                newNumSwitchesArr = [newNumSwitchesArr;repmat(Sw,n,1)];
-                newTHArr = [newTHArr;Delta*ones(n,1)];
-                if NUM_CINPUT_VARS ~= 0
-                    randPoints = rand(n,NUM_CINPUT_VARS);
-                    sInp = genRandVectors(randPoints,sys_def.CINPUT_BOUNDS);
-                    newInpArr = [newInpArr;sInp];
-                end
-                % TBD: cells need to be cateogorized as by modes!! this
-                % impl. is wrong for non-paritioned state space Hybrid
-                % systems!
-                exploredCells = [exploredCells;X_snapped];
-            end
-        end
-    end
-    
-    XArr = newX_arr;
-    ageArr = newAgeArr;
-    samples_numSwitches = newNumSwitchesArr;
-    currModeArr = newNewModeArr;
-    THArr = newTHArr;
-    
-    if NUM_CINPUT_VARS ~= 0
-        samples_Inp = newInpArr;
-    end
-    
-    
-end
-
-% create remaining matrices
-NUM_MODES = length(MODE_LIST);
-trajOffsetMat = zeros(NUM_MODES+1,1);
-trajMat = [];
-for currMode = 1:NUM_MODES
-    numTrajsInCurrMode = length(timeCellMat{currMode});
-    trajOffsetMat(currMode+1) = numTrajsInCurrMode;
-    trajMat = [trajMat; trajsCellMatXi{currMode} trajsCellMatXf{currMode} timeCellMat{currMode} repmat(currMode,numTrajsInCurrMode,1)];
-end
-fprintf(2,'number of recorded violations %d\n',numViolations);
-simTime = toc(time_sim);
-end
-
-function [finalArr,trajsCellMatXi,trajsCellMatXf,timeCellMat,trajMat,simTime] = simulateSystemCellBasedBB(sys_def,sys_prop,sys_abs,sys_opt)
-time_sim = tic;
-numViolations = 0;
-plotTrajs = 1;
-if plotTrajs == 1
-    hold on;
-end
-ONE = 1;
-MAX_SAMPLE_AGE = sys_prop.TH;
-grid_eps = sys_abs.grid_eps;
-
-NUM_STATE_VARS = sys_def.NUM_STATE_VARS;
-
-exploredCells = sys_def.initCells;
-
-cons_i = sys_prop.initConstraints;
-cons_f = sys_prop.finalConstraints;
-finalArr = [];
-
-numSamplesPerCell = sys_abs.numSamples;
-
-% hack to fix mode issue!
-initSet = cell(1,ONE);
-initSet{cons_i.mode} = sys_def.initSet{cons_i.mode};
-
-Delta = sys_abs.Delta;
-
-trajsCellMatXi = cell(1,ONE);
-trajsCellMatXf = cell(1,ONE);
-timeCellMat = cell(1,ONE);
-
-trajMat = [];
-
-modeInv = sys_def.modeInvMap(ONE);
-
-if ~isempty(initSet{ONE})
-    numSamples = size(initSet{ONE},1);
-    XArr = initSet{ONE};
-    propHitArr = zeros(numSamples,1);
-    StateArr = ones(numSamples,1);
-    disp(size(XArr,1))
-else
-    return
-end
-AGE = 0;
-
-SIM = sys_def.SIM;
-while AGE < MAX_SAMPLE_AGE && size(XArr,1) ~= 0
-    
-    numInitStates = size(XArr,1);
-    fprintf('simulating %d samples\n',numInitStates);
-    
-    
-    trajsMatXi = zeros(numInitStates,NUM_STATE_VARS);
-    trajsMatXf = zeros(numInitStates,NUM_STATE_VARS);
-    timeMat = zeros(numInitStates,1);
-    
-    
-    plotSet = cell(1,numInitStates);
-    
-    % parfor here
-    parfor i = 1:numInitStates
-        vio = 0;
-        X0 = XArr(i,1:NUM_STATE_VARS);
-        [t,X,StateArr(i)] = SIM([0 Delta],X0,[],StateArr(i));
-        Xf = X(end,:);
-        tf = t(end);
-        
-        %         if tf ~= Delta
-        %             error('tf~=delta for BB, something wrong with SIM??')
-        %         end
-        propHit = any(checkConstraintSat(cons_f,X'));
-        if propHit == 1
-            numViolations = numViolations+1;
-            %             warning('prop-sat')
-            finalArr = [finalArr; Xf];
-            vio = 1;
-        end
-        % TODO: make transition objects carry from and to info
-        trajsMatXi(i,:) = X0;
-        trajsMatXf(i,:) = Xf;
-        timeMat(i,:) = tf;
-        
-        %% check if landed on an error cell
-        if vio == 0
-            X_snapped = snapToGrid(Xf,grid_eps);
-            if checkIntersection(getCellRange(X_snapped,grid_eps),cons_f.cube) == 1
-                finalArr = [finalArr; Xf];
-                propHit = 1;
-            end
-        end
-        %TODO: better detection of a new mode is required for non-deterministic transitions
-        %% debug
-        if plotTrajs == 1
-            plotSet{i} = [X t+AGE];
-        end
-        propHitArr(i,1) = propHit;
-    end
-    AGE = AGE + Delta;
-    %% debug
-    if plotTrajs == 1
-        for j = 1:length(plotSet)
-            sys_opt.plotFun(plotSet{j}(:,NUM_STATE_VARS+1),plotSet{j}(:,1:NUM_STATE_VARS),ONE);
-        end
-        drawnow;
-    end
-    
-    trajsCellMatXi{ONE} = [trajsCellMatXi{ONE}; trajsMatXi];
-    trajsCellMatXf{ONE} = [trajsCellMatXf{ONE}; trajsMatXf];
-    timeCellMat{ONE} = [timeCellMat{ONE}; timeMat];
-    
-    filterIdx = propHitArr == 1;
-    filtered_XArr = trajsMatXf(~filterIdx,:);
-    filteredStateArr = StateArr(~filterIdx,:);
-    newX_arr = [];
-    newState_arr = [];
-    
-    numStates = size(filtered_XArr,1);
-    
-    % TBD: parallelize
-    for k = 1:numStates
-        X = filtered_XArr(k,:);
-        
-        % snap X to grid
-        X_snapped = snapToGrid(X,grid_eps);
-        
-        if isempty(exploredCells) || ~ismember(X_snapped,exploredCells,'rows')
-            % scatter only inside the cell
-            scatteredX = scatterX(X_snapped,sys_def,numSamplesPerCell,grid_eps, modeInv);
-            n = size(scatteredX,1);
-            newX_arr = [newX_arr; scatteredX];
-            newState_arr = [newState_arr; repmat(filteredStateArr(k),n,1)];
-            exploredCells = [exploredCells;X_snapped];
-        end
-    end
-    XArr = newX_arr;
-    StateArr = newState_arr;
-    propHitArr = zeros(size(XArr,1),1);
-end
-
-% create remaining matrices
-% NUM_MODES = length(MODE_LIST);
-NUM_MODES = ONE;
-trajOffsetMat = zeros(NUM_MODES+1,1);
-trajMat = [];
-% for ONE = 1:NUM_MODES
-numTrajsInCurrMode = length(timeCellMat{ONE});
-trajOffsetMat(ONE+1) = numTrajsInCurrMode;
-trajMat = [trajMat; trajsCellMatXi{ONE} trajsCellMatXf{ONE} timeCellMat{ONE} repmat(ONE,numTrajsInCurrMode,1)];
-% end
-fprintf(2,'number of recorded violations %d\n',numViolations);
-simTime = toc(time_sim);
 end
 
 %% treats cubes who share boundaries as a non-empty intersection
@@ -1208,7 +751,7 @@ end
 
 %% Optimization
 function [costMat,inputSolCellMat]=prepMat4Opt(p,trajMat)
-numPaths = size(p,1);
+numPaths = rows(p);
 fprintf('num of trajectories/paths to optimize: %d\n',numPaths);
 inputSolCellMat = {};
 costMat = [];
@@ -1549,7 +1092,7 @@ end
 return
 end
 function poly = cubeToPoly(c)
-NUM_STATE_VARS = size(c,1);
+NUM_STATE_VARS = rows(c);
 Al = -eye(NUM_STATE_VARS);
 bl = -c(:,1);
 Ah = eye(NUM_STATE_VARS);
@@ -1613,7 +1156,7 @@ sprintf('Ending Time: %02d:%02d', CLOCK(4), CLOCK(5))
 end
 
 function randVectors = genRandVectors(randPoints,range)
-numRPoints = size(randPoints,1);
+numRPoints = rows(randPoints);
 a = range(:,1)';
 b = range(:,2)';
 A = repmat(a,numRPoints,1);
@@ -1623,6 +1166,64 @@ randVectors = randPoints.*(B-A)+A;
 % % values whose ranges have 0 width
 % zeroWidthIdx = range(:,1) - range(:,2) == 0;
 % randVectors(zeroWidthIdx) = range();
+end
+
+function [X0,M0] = getX0AndM0(sys_def,sys_prop,sys_abs,sys_opt,inputMat)
+X0 = inputMat(1,1:sys_def.NUM_STATE_VARS);
+M0 = inputMat(1,sys_def.MODE_IDX);
+end
+
+function drawPropBox(sys_opt)
+
+sys_opt.drawProp();
+
+% used for diabeticFisher
+% line([0 1],[-0.9 -0.9])
+% cons_f = sys_prop.finalConstraints.cube;
+% line([cons_f(1,1) cons_f(1,2) cons_f(1,2) cons_f(1,1) cons_f(1,1)],[cons_f(2,1) cons_f(2,1) cons_f(2,2) cons_f(2,2) cons_f(2,1)],'color','b');
+
+% used for bball_sinusoid
+% cons_f = sys_prop.finalConstraints.cube;
+% line([cons_f(5,1) cons_f(5,2) cons_f(5,2) cons_f(5,1) cons_f(5,1)],[cons_f(2,1) cons_f(2,1) cons_f(2,2) cons_f(2,2) cons_f(2,1)],'color','b');
+
+% cons_i = sys_prop.initConstraints.cube;
+% line([cons_i(1,1) cons_i(1,2) cons_i(1,2) cons_i(1,1) cons_i(1,1)],[cons_i(2,1) cons_i(2,1) cons_i(2,2) cons_i(2,2) cons_i(2,1)],'color','g');
+end
+
+% The number of rows.
+% ROWS is a more readable alternative to size(x,1).
+function r = rows(x)
+r = size(x,1);
+end
+
+% TODO: Do not use with sparse matrices
+function y = scale_cols(x, s)
+y = x.*repmat(s(:).', rows(x), 1);
+end
+
+function drawCells(C,grid_eps)
+for i = 1:rows(C)
+    c = C(i,:);
+    r = getCellRange(c,grid_eps);
+    line([r(1,1) r(1,2) r(1,2) r(1,1) r(1,1)],[r(2,1) r(2,1) r(2,2) r(2,2) r(2,1)],'color','b','linewidth',3);
+end
+end
+
+function s = mySign(X)
+s = abs(X)./X;
+nanIdx = isnan(s);
+% replace sign(0) with 1
+s(nanIdx) = 1;
+end
+
+function myFigure(h)
+% myFigure(h);
+isFigureHandle = ishandle(h) && strcmp(get(h,'type'),'figure');
+if isFigureHandle == 1
+    set(0,'CurrentFigure',h)
+else
+    figure(h);
+end
 end
 
 function [ret_t,ret_X] = simulateForSTaliroBB(sys_def,sys_prop,sys_abs,sys_opt,X0,M0,~)
@@ -1667,6 +1268,160 @@ end
 % % plot(ret_t,ret_X(:,2));
 % plot(ret_X(:,1),ret_X(:,2));
 
+end
+
+function [finalArr,trajsCellMatXi,trajsCellMatXf,timeCellMat,trajMat,simTime] = simulateSystemCellBasedBB(sys_def,sys_prop,sys_abs,sys_opt)
+time_sim = tic;
+numViolations = 0;
+plotTrajs = 1;
+if plotTrajs == 1
+    hold on;
+end
+ONE = 1;
+MAX_SAMPLE_AGE = sys_prop.TH;
+grid_eps = sys_abs.grid_eps;
+
+NUM_STATE_VARS = sys_def.NUM_STATE_VARS;
+
+exploredCells = sys_def.initCells;
+
+cons_i = sys_prop.initConstraints;
+cons_f = sys_prop.finalConstraints;
+finalArr = [];
+
+numSamplesPerCell = sys_abs.numSamples;
+
+% hack to fix mode issue!
+initSet = cell(1,ONE);
+initSet{cons_i.mode} = sys_def.initSet{cons_i.mode};
+
+Delta = sys_abs.Delta;
+
+trajsCellMatXi = cell(1,ONE);
+trajsCellMatXf = cell(1,ONE);
+timeCellMat = cell(1,ONE);
+
+trajMat = [];
+
+modeInv = sys_def.modeInvMap(ONE);
+
+if ~isempty(initSet{ONE})
+    numSamples = rows(initSet{ONE});
+    XArr = initSet{ONE};
+    propHitArr = zeros(numSamples,1);
+    StateArr = ones(numSamples,1);
+    disp(rows(XArr))
+else
+    return
+end
+AGE = 0;
+
+SIM = sys_def.SIM;
+while AGE < MAX_SAMPLE_AGE && rows(XArr) ~= 0
+    
+    numInitStates = rows(XArr);
+    fprintf('simulating %d samples\n',numInitStates);
+    
+    
+    trajsMatXi = zeros(numInitStates,NUM_STATE_VARS);
+    trajsMatXf = zeros(numInitStates,NUM_STATE_VARS);
+    timeMat = zeros(numInitStates,1);
+    
+    
+    plotSet = cell(1,numInitStates);
+    
+    % parfor here
+    parfor i = 1:numInitStates
+        vio = 0;
+        X0 = XArr(i,1:NUM_STATE_VARS);
+        [t,X,StateArr(i)] = SIM([0 Delta],X0,[],StateArr(i));
+        Xf = X(end,:);
+        tf = t(end);
+        
+        %         if tf ~= Delta
+        %             error('tf~=delta for BB, something wrong with SIM??')
+        %         end
+        propHit = any(checkConstraintSat(cons_f,X'));
+        if propHit == 1
+            numViolations = numViolations+1;
+            %             warning('prop-sat')
+            finalArr = [finalArr; Xf];
+            vio = 1;
+        end
+        % TODO: make transition objects carry from and to info
+        trajsMatXi(i,:) = X0;
+        trajsMatXf(i,:) = Xf;
+        timeMat(i,:) = tf;
+        
+        %% check if landed on an error cell
+        if vio == 0
+            X_snapped = snapToGrid(Xf,grid_eps);
+            if checkIntersection(getCellRange(X_snapped,grid_eps),cons_f.cube) == 1
+                finalArr = [finalArr; Xf];
+                propHit = 1;
+            end
+        end
+        %TODO: better detection of a new mode is required for non-deterministic transitions
+        %% debug
+        if plotTrajs == 1
+            plotSet{i} = [X t+AGE];
+        end
+        propHitArr(i,1) = propHit;
+    end
+    AGE = AGE + Delta;
+    %% debug
+    if plotTrajs == 1
+        for j = 1:length(plotSet)
+            sys_opt.plotFun(plotSet{j}(:,NUM_STATE_VARS+1),plotSet{j}(:,1:NUM_STATE_VARS),ONE);
+        end
+        drawnow;
+    end
+    
+    trajsCellMatXi{ONE} = [trajsCellMatXi{ONE}; trajsMatXi];
+    trajsCellMatXf{ONE} = [trajsCellMatXf{ONE}; trajsMatXf];
+    timeCellMat{ONE} = [timeCellMat{ONE}; timeMat];
+    
+    filterIdx = propHitArr == 1;
+    filtered_XArr = trajsMatXf(~filterIdx,:);
+    filteredStateArr = StateArr(~filterIdx,:);
+    newX_arr = [];
+    newState_arr = [];
+    
+    numStates = rows(filtered_XArr);
+    
+    % TBD: parallelize
+    for k = 1:numStates
+        X = filtered_XArr(k,:);
+        
+        % snap X to grid
+        X_snapped = snapToGrid(X,grid_eps);
+        
+        if isempty(exploredCells) || ~ismember(X_snapped,exploredCells,'rows')
+            % scatter only inside the cell
+            scatteredX = scatterX(X_snapped,sys_def,numSamplesPerCell,grid_eps, modeInv);
+            n = rows(scatteredX);
+            newX_arr = [newX_arr; scatteredX];
+            newState_arr = [newState_arr; repmat(filteredStateArr(k),n,1)];
+            exploredCells = [exploredCells;X_snapped];
+        end
+    end
+    XArr = newX_arr;
+    StateArr = newState_arr;
+    propHitArr = zeros(rows(XArr),1);
+end
+
+% create remaining matrices
+% NUM_MODES = length(MODE_LIST);
+NUM_MODES = ONE;
+trajOffsetMat = zeros(NUM_MODES+1,1);
+trajMat = [];
+% for ONE = 1:NUM_MODES
+numTrajsInCurrMode = length(timeCellMat{ONE});
+trajOffsetMat(ONE+1) = numTrajsInCurrMode;
+trajMat = [trajMat; trajsCellMatXi{ONE} trajsCellMatXf{ONE} timeCellMat{ONE} repmat(ONE,numTrajsInCurrMode,1)];
+% end
+fprintf(2,'number of recorded violations %d\n',numViolations);
+simTime = toc(time_sim);
 end
 
 function numViolations = simulateSystemFromInitArrBB(sys_def,sys_prop,sys_abs,sys_opt,initSet_cellMat)
@@ -1715,7 +1470,7 @@ currMode = initMode;
 
 
 % parfor
-for i = 1:size(initSet,1)
+for i = 1:rows(initSet)
     propHit = 0;
     simTime = 0;
     X0 = initSet(i,1:NUM_STATE_VARS);
@@ -1770,66 +1525,305 @@ for i = 1:size(initSet,1)
 end
 end
 
-function [X0,M0] = getX0AndM0(sys_def,sys_prop,sys_abs,sys_opt,inputMat)
-X0 = inputMat(1,1:sys_def.NUM_STATE_VARS);
-M0 = inputMat(1,sys_def.MODE_IDX);
+function [finalArr,trajsCellMatXi,trajsCellMatXf,timeCellMat,trajMat,simTime] = simulateSystemCellBasedMERGEDBUGGYFLATIP(sys_def,sys_prop,sys_abs,sys_opt,eventToTransitionInvMap,eventSet,terminalSet,eventInfo)
+
+time_sim = tic;
+numViolations = 0;
+plotTrajs = 0;
+
+if sys_def.NUM_PARAMS ~= 0
+    error('parameter handlind disabled: code them in as regular state variables')
 end
 
-function drawPropBox(sys_opt)
+MAX_SWITCHINGS = sys_opt.ScatterSim.MAX_SWITCHINGS;
+MAX_SAMPLE_AGE = sys_prop.TH;
 
-sys_opt.drawProp();
 
-% used for diabeticFisher
-% line([0 1],[-0.9 -0.9])
-% cons_f = sys_prop.finalConstraints.cube;
-% line([cons_f(1,1) cons_f(1,2) cons_f(1,2) cons_f(1,1) cons_f(1,1)],[cons_f(2,1) cons_f(2,1) cons_f(2,2) cons_f(2,2) cons_f(2,1)],'color','b');
+grid_eps = sys_abs.grid_eps;
 
-% used for bball_sinusoid
-% cons_f = sys_prop.finalConstraints.cube;
-% line([cons_f(5,1) cons_f(5,2) cons_f(5,2) cons_f(5,1) cons_f(5,1)],[cons_f(2,1) cons_f(2,1) cons_f(2,2) cons_f(2,2) cons_f(2,1)],'color','b');
+modeDynMap = sys_maps.modeDynMap;
+transitionMap = sys_maps.transitionMap;
+MODE_LIST = sys_def.MODE_LIST;
+NUM_STATE_VARS = sys_def.NUM_STATE_VARS;
 
-% cons_i = sys_prop.initConstraints.cube;
-% line([cons_i(1,1) cons_i(1,2) cons_i(1,2) cons_i(1,1) cons_i(1,1)],[cons_i(2,1) cons_i(2,1) cons_i(2,2) cons_i(2,2) cons_i(2,1)],'color','g');
+
+exploredCells = sys_def.initCells;
+
+cons_i = sys_prop.initConstraints;
+cons_f = sys_prop.finalConstraints;
+finalArr = [];
+
+numSamplesPerCell = sys_abs.numSamples;
+
+% hack to fix mode issue!
+initSet = cell(1,sys_def.NUM_MODES);
+initSet{cons_i.mode} = sys_def.initSet{cons_i.mode};
+
+options = odeset('Events',@events,'Refine',4,'RelTol',1e-6);%,'MaxStep',1e-4);
+
+% This assumes that the max dwell time in a mode is 100s
+% MODE_TIME_HORIZON = sys_opt.MODE_TIME_HORIZON;
+Delta = sys_abs.Delta;
+trajsCellMatXi = cell(1,sys_def.NUM_MODES);
+trajsCellMatXf = cell(1,sys_def.NUM_MODES);
+timeCellMat = cell(1,sys_def.NUM_MODES);
+trajMat = [];
+
+% [eventToTransitionInvMap,eventSet,terminalSet,eventInfo] = prepEventDetection(sys_def,sys_maps);
+
+NUM_CINPUT_VARS = sys_def.NUM_CINPUT_VARS;
+
+XArr = [];
+ageArr = [];
+samples_numSwitches =[];
+currModeArr = [];
+THArr = [];
+for currMode = MODE_LIST
+    if ~isempty(initSet{currMode})
+        numSamples = rows(initSet{currMode});
+        XArr = [XArr; initSet{currMode}];
+        ageArr = [ageArr; zeros(numSamples,1)];
+        samples_numSwitches =[samples_numSwitches; zeros(numSamples,1)];
+        disp(rows(XArr))
+        currModeArr = [currModeArr; repmat(currMode,numSamples,1)];
+        THArr = [THArr; Delta*ones(numSamples,1)];
+        if NUM_CINPUT_VARS ~= 0
+            randPoints = rand(numSamples,NUM_CINPUT_VARS);
+            samples_Inp = genRandVectors(randPoints,sys_def.CINPUT_BOUNDS);
+        else
+            samples_Inp = [];
+        end
+    end
 end
 
-function r = rows(x)
-% ROWS      The number of rows.
-% ROWS is a more readable alternative to size(x,1).
-r = size(x,1);
+
+while ~isempty(XArr)
+    if NUM_CINPUT_VARS ~= 0
+        InpArr = samples_Inp;
+    else
+        InpArr = [];
+    end
+    
+    numInitStates = rows(XArr);
+    fprintf('simulating %d samples\n',numInitStates);
+    
+    
+    trajsMatXi = zeros(numInitStates,NUM_STATE_VARS);
+    trajsMatXf = zeros(numInitStates,NUM_STATE_VARS);
+    timeMat = zeros(numInitStates,1);
+    newModeArr = [];
+    
+    plotSet = cell(1,numInitStates);
+    
+    switchFlagArr = zeros(numInitStates,1);
+    
+    % parfor here
+    parfor i = 1:numInitStates
+        vio = 0;
+        X0 = XArr(i,1:NUM_STATE_VARS);
+        currMode = currModeArr(i);
+        eventToTransitionInv = eventToTransitionInvMap{currMode};
+        modeDynStruct = modeDynMap(currMode);
+        if NUM_CINPUT_VARS ~= 0
+            if modeDynStruct.isNonLinear == 0
+                modeDyn = @(~,X,~,U,~,~,~) modeDynStruct.A*X + modeDynStruct.b + modeDynStruct.B*U;
+            else
+                modeDyn = @(t,X,~,U,currMode,~,~) modeDynStruct.F(t,X,U,currMode);
+            end
+        else
+            if modeDynStruct.isNonLinear == 0
+                modeDyn = @(~,X,~,~,~,~,~) modeDynStruct.A*X + modeDynStruct.b;
+            else
+                modeDyn = @(t,X,~,~,currMode,~,~) modeDynStruct.F(t,X,[],currMode);
+            end
+        end
+        TH = THArr(i,1);
+        
+        if NUM_CINPUT_VARS == 0
+            [t,X,te,ye,ie] = ode45(modeDyn,[0 TH],X0,options,[],[],currMode,eventSet,terminalSet);
+        else
+            cip = InpArr(i,1);
+            [t,X,te,ye,ie] = ode45(modeDyn,[0 TH],X0,options,[],cip,currMode,eventSet,terminalSet);
+        end
+        [teout, Y, eventFound, event] = checkNreturnEvent(te,ye,ie,eventToTransitionInv,eventInfo,transitionMap,sys_opt);
+        if isempty(te) || ~eventFound
+            newMode = currMode;
+            Xf = X(end,:);
+            tf = t(end);
+            if tf ~= TH
+                error('internal: not possible! floating point errors?')
+            end
+            THArr(i,1) = 0;
+        elseif event.type == TRANSITION
+            %             warning('TRANSITION')
+            newMode = event.transitionID.toMode;
+            transition = getTransition(event.transitionID,transitionMap);
+            if transition.reset.isNonLinear == 1
+                Xf = transition.reset.F(Y')';
+            elseif transition.reset.isNonLinear == 0
+                Xf = (transition.reset.A*Y' + transition.reset.b)';
+            else
+                error('simulate: reset.isNonLinear is neither 0 or 1!')
+            end
+            tf = teout;
+            switchFlagArr(i) = 1;
+            THArr(i,1) = THArr(i,1) - tf;
+        elseif event.type == MODE_INVARIANT
+            newMode = -1;
+            Xf = Y;
+            tf = teout;
+            %             warning('invariant hit!')
+        elseif event.type == PROP_SAT
+            newMode = -1;
+            Xf = Y;
+            tf = teout;
+            numViolations = numViolations+1;
+            %error('prop-sat')
+            finalArr = [finalArr; Xf];
+            vio = 1;
+        else
+            error('simulateSystem: not possible to reach here')
+        end
+        % TODO: make transition objects carry from and to info
+        trajsMatXi(i,:) = X0;
+        trajsMatXf(i,:) = Xf;
+        timeMat(i,:) = tf;
+        
+        %% check if landed on an error cell
+        if vio == 0%
+            X_snapped = snapToGrid(Xf,grid_eps);
+            if checkIntersection(getCellRange(X_snapped,grid_eps),cons_f.cube) == 1
+                finalArr = [finalArr; Xf];
+                newMode = -1;
+            end
+        end
+        
+        %TODO: better detection of a new mode is required for non-deterministic transitions
+        %% debug
+        if plotTrajs == 1
+            idx = (t <= tf);
+            t = [t(idx); tf];
+            X = [X(idx,:); Xf];
+            plotSet{i} = [X t+ageArr(i,1)];
+        end
+        newModeArr(i,1) = newMode;
+        ageArr(i,1) = ageArr(i,1) + tf;
+    end
+    %% debug
+    if plotTrajs == 1
+        for j = 1:length(plotSet)
+            sys_opt.plotFun(plotSet{j}(:,NUM_STATE_VARS+1),plotSet{j}(:,1:NUM_STATE_VARS),currModeArr(j));
+        end
+        drawnow;
+    end
+    
+    for currMode = MODE_LIST
+        idx = currModeArr == currMode;
+        trajsCellMatXi{currMode} = [trajsCellMatXi{currMode}; trajsMatXi(idx,:)];
+        trajsCellMatXf{currMode} = [trajsCellMatXf{currMode}; trajsMatXf(idx,:)];
+        timeCellMat{currMode} = [timeCellMat{currMode}; timeMat(idx)];
+    end
+    
+    numSwitchArr = samples_numSwitches + switchFlagArr;
+    
+    filterIdx = (newModeArr < 0 | ageArr >= MAX_SAMPLE_AGE | numSwitchArr >= MAX_SWITCHINGS);
+    
+    %fprintf('suspending %d\n', length(find(filterIdx)))
+    % invert the indices and assign only the values which are not suspended
+    filtered_newModeArr = newModeArr(~filterIdx);
+    filtered_ageArr = ageArr(~filterIdx);
+    filtered_XArr = trajsMatXf(~filterIdx,:);
+    filtered_swichArr = numSwitchArr(~filterIdx);
+    filtered_THArr = THArr(~filterIdx);
+    if NUM_CINPUT_VARS ~= 0
+        filtered_InpArr = InpArr(~filterIdx);
+    else
+        filtered_InpArr = [];
+    end
+    newX_arr = [];
+    newNewModeArr = [];
+    newAgeArr = [];
+    newNumSwitchesArr = [];
+    newTHArr = [];
+    newInpArr = [];
+    numStates = length(filtered_newModeArr);
+    
+    %% new code for scattering:
+    % - does not scatter at guards
+    % - scatters more uniformly
+    
+    
+    % TBD: parallelize
+    for k = 1:numStates
+        X = filtered_XArr(k,:);
+        newMode = filtered_newModeArr(k);
+        age = filtered_ageArr(k);
+        Sw = filtered_swichArr(k);
+        TH = filtered_THArr(k);
+        if NUM_CINPUT_VARS ~= 0
+            Inp = filtered_InpArr(k);
+        else
+            Inp = [];
+        end
+        
+        if TH ~= 0
+            newX_arr = [newX_arr;X];
+            newNewModeArr = [newNewModeArr;newMode];
+            newAgeArr = [newAgeArr;age];
+            newNumSwitchesArr = [newNumSwitchesArr;Sw];
+            newTHArr = [newTHArr;TH];
+            newInpArr = [newInpArr;Inp];
+        else
+            modeInv = sys_def.modeInvMap(newMode);
+            % snap X to grid
+            X_snapped = snapToGrid(X,grid_eps);
+            
+            if isempty(exploredCells) || ~ismember(X_snapped,exploredCells,'rows')
+                % scatter only inside the cell
+                scatteredX = scatterX(X_snapped,sys_def,numSamplesPerCell,grid_eps, modeInv);
+                n = rows(scatteredX);
+                
+                newX_arr = [newX_arr; scatteredX];
+                newNewModeArr = [newNewModeArr; repmat(newMode,n,1)];
+                % all the new scattered points inherit the age of their father/mother
+                newAgeArr = [newAgeArr; repmat(age,n,1)];
+                newNumSwitchesArr = [newNumSwitchesArr;repmat(Sw,n,1)];
+                newTHArr = [newTHArr;Delta*ones(n,1)];
+                if NUM_CINPUT_VARS ~= 0
+                    randPoints = rand(n,NUM_CINPUT_VARS);
+                    sInp = genRandVectors(randPoints,sys_def.CINPUT_BOUNDS);
+                    newInpArr = [newInpArr;sInp];
+                end
+                % TBD: cells need to be cateogorized as by modes!! this
+                % impl. is wrong for non-paritioned state space Hybrid
+                % systems!
+                exploredCells = [exploredCells;X_snapped];
+            end
+        end
+    end
+    
+    XArr = newX_arr;
+    ageArr = newAgeArr;
+    samples_numSwitches = newNumSwitchesArr;
+    currModeArr = newNewModeArr;
+    THArr = newTHArr;
+    
+    if NUM_CINPUT_VARS ~= 0
+        samples_Inp = newInpArr;
+    end
+    
+    
 end
 
-function y = scale_cols(x, s)
-% SCALE_COLS       Scale each column of a matrix.
-% SCALE_COLS(x,s) returns matrix y, same size as x, such that
-% y(:,i) = x(:,i)*s(i)
-% It is more efficient than x*diag(s), but consumes a similar amount of memory.
-% Warning: It consumes a lot of memory when x is sparse.
-
-y = x.*repmat(s(:).', rows(x), 1);
-%y = x.*(ones(rows(x),1)*s(:)');
+% create remaining matrices
+NUM_MODES = length(MODE_LIST);
+trajOffsetMat = zeros(NUM_MODES+1,1);
+trajMat = [];
+for currMode = 1:NUM_MODES
+    numTrajsInCurrMode = length(timeCellMat{currMode});
+    trajOffsetMat(currMode+1) = numTrajsInCurrMode;
+    trajMat = [trajMat; trajsCellMatXi{currMode} trajsCellMatXf{currMode} timeCellMat{currMode} repmat(currMode,numTrajsInCurrMode,1)];
 end
-
-function drawCells(C,grid_eps)
-for i = 1:size(C,1)
-    c = C(i,:);
-    r = getCellRange(c,grid_eps);
-    line([r(1,1) r(1,2) r(1,2) r(1,1) r(1,1)],[r(2,1) r(2,1) r(2,2) r(2,2) r(2,1)],'color','b','linewidth',3);
-end
-end
-
-function s = mySign(X)
-s = abs(X)./X;
-nanIdx = isnan(s);
-% replace sign(0) with 1
-s(nanIdx) = 1;
-end
-
-function myFigure(h)
-% myFigure(h);
-isFigureHandle = ishandle(h) && strcmp(get(h,'type'),'figure');
-if isFigureHandle == 1
-    set(0,'CurrentFigure',h)
-else
-    figure(h);
-end
+fprintf(2,'number of recorded violations %d\n',numViolations);
+simTime = toc(time_sim);
 end
