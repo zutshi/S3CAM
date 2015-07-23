@@ -1,9 +1,17 @@
 %% Start logging
 
 %% get system structures
+
 % [sys_def,sys_prop,sys_abs,sys_opt] = AbstractFuelControl;
-[sys_def,sys_prop,sys_abs,sys_opt] = vanderpol1();
+
+% addpath('./benchmarks/vanderpol/')
+% [sys_def,sys_prop,sys_abs,sys_opt] = vanderpol1();
+
+% addpath('./benchmarks/vanderpol/')
 % [sys_def,sys_prop,sys_abs,sys_opt] = vanderpol1_sml();
+
+addpath('./benchmarks/bball/')
+[sys_def,sys_prop,sys_abs,sys_opt] = bball();
 
 %% start logging
 clock_str = num2str(clock(), '%02.0f');
