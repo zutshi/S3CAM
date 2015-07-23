@@ -16,8 +16,6 @@ The archive containes
 - Type 'make' to compile C files in the ./src/graphNpaths directory
 - Type 'make' to compile C files in the ./src/graphNpaths/k_paths directory
 - To compare against S-Taliro: Download and install S-Taliro v1.4 from https://sites.google.com/a/asu.edu/s-taliro/s-taliro/download
-- Open Matlab 
-        Enable Parallelization: Type 'matlabpool' in matlab to start worker threads
 
 ###################
 # RUN ###
